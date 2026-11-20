@@ -6,6 +6,8 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
+import 'received_message.dart';
+
 const _channel = AndroidNotificationChannel(
   'high_importance_channel',
   'การแจ้งเตือนทั่วไป',
@@ -21,34 +23,10 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   debugPrint('Background FCM message: ${message.messageId}');
 }
 
-class ReceivedMessage {
-  const ReceivedMessage({
-    required this.title,
-    required this.body,
-    required this.data,
-    required this.source,
-  });
-
-  factory ReceivedMessage.fromRemote(
-    RemoteMessage message,
-    String source,
-  ) => ReceivedMessage(
-    title:
-        message.notification?.title ??
-        message.data['title']?.toString() ??
-        'ข้อความใหม่',
-    body: message.notification?.body ?? message.data['body']?.toString() ?? '',
-    data: message.data.isEmpty ? '' : jsonEncode(message.data),
-    source: source,
-  );
-
-  final String title;
-  final String body;
-  final String data;
-  final String source;
-}
-
 class FcmService extends ChangeNotifier {
+  FcmService({this.onNotificationOpened});
+
+  final void Function(ReceivedMessage)? onNotificationOpened;
   final _localNotifications = FlutterLocalNotificationsPlugin();
   final List<StreamSubscription<dynamic>> _subscriptions = [];
   final List<ReceivedMessage> _messages = [];
@@ -119,7 +97,7 @@ class FcmService extends ChangeNotifier {
     );
     _subscriptions.add(
       FirebaseMessaging.onMessageOpenedApp.listen((message) {
-        _record(message, 'เปิดจากการแจ้งเตือน');
+        _openRemoteMessage(message, 'เปิดจากการแจ้งเตือน');
       }),
     );
     _subscriptions.add(
@@ -140,7 +118,9 @@ class FcmService extends ChangeNotifier {
     );
     ready = true;
     final initial = await FirebaseMessaging.instance.getInitialMessage();
-    if (initial != null) _record(initial, 'เปิดแอปจาก FCM ขณะปิดแอป');
+    if (initial != null) {
+      _openRemoteMessage(initial, 'เปิดแอปจาก FCM ขณะปิดแอป');
+    }
     final localLaunch = await _localNotifications
         .getNotificationAppLaunchDetails();
     if (localLaunch?.didNotificationLaunchApp ?? false) {
@@ -174,13 +154,19 @@ class FcmService extends ChangeNotifier {
     _notify();
   }
 
+  void _openRemoteMessage(RemoteMessage message, String source) {
+    if (_disposed) return;
+    _record(message, source);
+    onNotificationOpened?.call(ReceivedMessage.fromRemote(message, source));
+  }
+
   void _openLocalMessage(String? payload) {
     if (payload == null) return;
     try {
       final message = RemoteMessage.fromMap(
         Map<String, dynamic>.from(jsonDecode(payload) as Map),
       );
-      _record(message, 'เปิดจากการแจ้งเตือนในแอป');
+      _openRemoteMessage(message, 'เปิดจากการแจ้งเตือนในแอป');
     } catch (exception) {
       error = 'อ่านข้อความแจ้งเตือนไม่สำเร็จ: $exception';
       _notify();

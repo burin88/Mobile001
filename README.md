@@ -169,6 +169,78 @@ APK release นี้ยังเซ็นด้วย **debug key ตามก�
 
 อ้างอิง: [Firebase: Distribute Android apps using the CLI](https://firebase.google.com/docs/app-distribution/android/distribute-cli)
 
+## FCM เปิดหน้า test2 / test3 และบันทึกการกด (19 พฤศจิกายน 2026)
+
+ส่ง payload ผ่าน API ส่ง FCM ของระบบ ตัวอย่าง:
+
+```json
+{
+  "tokens": ["<FCM registration token จากมือถือ>"],
+  "notification": {
+    "title": "inf mobile test",
+    "body": "hahaha"
+  },
+  "data": {
+    "id": "notification-id-from-backend",
+    "route": "/test2"
+  }
+}
+```
+
+| data.route | หน้าที่เปิด |
+| --- | --- |
+| `test2` หรือ `/test2` | test2 |
+| `test3` หรือ `/test3` | test3 |
+| ค่าว่างหรือค่าอื่น | หน้าข้อมูลแจ้งเตือน พร้อมแจ้งว่า route ไม่ตรง |
+
+ทั้งสองหน้าแสดง title, body, ID, route และ JSON `data` ทั้งหมดจาก FCM รองรับ `data.id` และ `data.Id` โดยให้ `id` ที่ไม่ว่างมีลำดับก่อน ใช้ named routes ภายในแอปสำหรับ FCM; ไม่ได้เพิ่ม custom URL scheme หรือ Android App Links สำหรับลิงก์จากภายนอก
+
+เมื่อกด system notification (foreground/local, background หรือ cold start) หรือกด **เปิดข้อความ** ในหน้าหลัก แอปจะเปิดหน้าปลายทางและส่ง:
+
+```http
+PATCH https://192.168.199.131:5000/api/noti/fcm/click
+Accept: application/json
+Content-Type: application/json
+
+{"id":"notification-id-from-backend"}
+```
+
+- แค่รับข้อความยังไม่ส่ง click API; ปุ่มเปิด test2/test3 แบบไม่มีข้อความก็ไม่เรียก API
+- เปลี่ยนหน้าโดยไม่รอ API และแสดงสถานะส่ง/สำเร็จ/ผิดพลาดบนหน้าปลายทาง
+- ไม่มี ID: ยังอ่านข้อมูลได้ แต่ไม่ส่ง request ที่มี ID ว่าง
+- callback ซ้ำของ message เดียวกันจะไม่เปิดหน้าและส่ง API ซ้ำในรอบการรันแอปเดียวกัน หากผู้ใช้กดเปิดข้อความเดิมในรายการอีกครั้ง จะส่ง API สำหรับการกดครั้งใหม่ (ยกเว้น request เดิมยังรอผลอยู่)
+- HTTP 2xx ถือว่าสำเร็จ; HTTP error, เครือข่ายล้มเหลว หรือ timeout 10 วินาที แสดงข้อผิดพลาด และให้ผู้ใช้กดส่งสถานะอีกครั้ง ไม่มี automatic retry
+- timeout ไม่ยืนยันว่า server ยังไม่ได้บันทึก; backend ควรรองรับการ PATCH ID เดิมซ้ำอย่างเหมาะสม
+- รองรับ cold start โดยรอ Navigator พร้อมก่อนเปิดหน้า
+
+ตรวจการเชื่อมต่อจริงด้วย HEAD โดยไม่ส่ง click: เครื่องพัฒนาปฏิเสธ HTTPS certificate ด้วย `SEC_E_UNTRUSTED_ROOT` จึงยังไม่ได้ยืนยัน PATCH กับ backend จริง ต้องใช้ HTTPS certificate ที่มือถือเชื่อถือและอยู่ในเครือข่ายที่เข้าถึง IP นี้ได้ ไม่มีการปิด certificate verification ในแอป
+
+ถ้ามี URL HTTPS ที่ใช้ certificate ถูกต้อง สามารถกำหนดตอน build/run ได้:
+
+```powershell
+flutter run --dart-define=FCM_CLICK_URL=https://your-api.example.com/api/noti/fcm/click
+```
+
+ทดสอบ: ส่งข้อความไป test2/test3 แล้วกดตอนเปิดแอป, กด Home และตอนปิดแอป ตรวจข้อมูลหน้าปลายทางและสถานะ API ทดสอบอัตโนมัติด้วย `flutter test`: มี HTTP server ในเครื่องเพื่อตรวจ method/path/headers/body จริง, duplicate callback, HTTP 500, retry, timeout, ID หาย และ widget tests สำหรับ cold start/test3/back navigation การทดสอบเหล่านี้ไม่ได้ยืนยันการส่ง push บนมือถือจริงหรือผลบันทึกของ backend จริง
+
+ผลตรวจสอบ 19 พฤศจิกายน 2026: `flutter analyze` ผ่านโดยไม่พบปัญหา, `flutter test` ผ่านทั้ง 7 กรณี และ `flutter build apk --debug` สำเร็จ (`build/app/outputs/flutter-apk/app-debug.apk`) ไม่ได้อัปโหลด App Distribution ในงานนี้
+
+## หน้า page2 / page3 สำหรับทดสอบการคลิก FCM
+
+เพิ่มหน้าแยก `lib/pages/page2.dart` และ `lib/pages/page3.dart` ลงทะเบียน route `/page2` และ `/page3` แล้ว รองรับ `data.route` ทั้ง `page2`, `/page2`, `page3`, `/page3` เมื่อกดแจ้งเตือนจะเปิดหน้าตาม route พร้อมข้อมูล FCM และเรียก click API ด้วย ID ตาม flow เดิม หน้าหลักมีปุ่มเปิด page2/page3 สำหรับดูหน้าได้ด้วย
+
+ตัวอย่าง payload ที่ส่งจาก backend:
+
+```json
+{
+  "tokens": ["<FCM token>"],
+  "notification": {"title": "inf mobile test", "body": "hahaha"},
+  "data": {"id": "notification-id", "route": "/page2"}
+}
+```
+
+เปลี่ยน `route` เป็น `/page3` เพื่อทดสอบอีกหน้า ทั้งสองหน้าแสดง title, body, ID, route, JSON data และสถานะ click API
+
 ## เอกสารอ้างอิง
 
 - [Firebase: Flutter FCM setup](https://firebase.google.com/docs/cloud-messaging/flutter/get-started)
